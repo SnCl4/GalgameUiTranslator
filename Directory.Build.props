@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup Condition="'$(MSBuildProjectFile)' == 'GalgameUiTranslator.Net10.csproj'">
+    <BaseIntermediateOutputPath>obj\net10\</BaseIntermediateOutputPath>
+    <OutputPath>bin\net10\</OutputPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectFile)' == 'SmokeTests.Net10.csproj'">
+    <BaseIntermediateOutputPath>obj\net10\</BaseIntermediateOutputPath>
+    <OutputPath>bin\net10\</OutputPath>
+  </PropertyGroup>
+</Project>

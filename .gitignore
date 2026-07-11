@@ -1,0 +1,15 @@
+bin/
+obj/
+publish/
+artifacts/
+.vs/
+.codex/
+.agents/
+.dotnet-home/
+.dotnet10/
+.dotnet-install.ps1
+crash.log
+TestResults/
+*.user
+*.suo
+*.guih.json
