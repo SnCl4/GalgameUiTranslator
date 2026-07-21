@@ -1,0 +1,10 @@
+PP-LCNet text-line orientation classifier ONNX model
+
+Distributed with RapidOcrNet 3.0.0 for PP-OCR text-line orientation.
+Source projects: RapidOCR and PaddleOCR
+License: Apache License 2.0
+https://github.com/RapidAI/RapidOCR
+https://github.com/PaddlePaddle/PaddleOCR
+
+ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx
+SHA256: 54379AE5174D026780215FC748A7F31910DEE36818E63D49E17DC598ECC82DF7

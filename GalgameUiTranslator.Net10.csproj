@@ -22,7 +22,7 @@
     <PackageReference Include="RapidOcrNet" Version="3.0.0" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="models\v6\**\*">
+    <Content Include="models\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
