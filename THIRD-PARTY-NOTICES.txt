@@ -1,0 +1,33 @@
+GalgameUiTranslator third-party notices
+
+Local OCR is powered by the following components:
+
+- RapidOcrNet 3.0.0
+  Copyright the RapidOcrNet contributors
+  Licensed under Apache License 2.0
+  https://github.com/BobLd/RapidOcrNet
+
+- RapidOCR and PP-OCRv6 model files
+  Copyright the RapidAI and PaddleOCR contributors
+  Licensed under Apache License 2.0
+  https://github.com/RapidAI/RapidOCR
+  https://github.com/PaddlePaddle/PaddleOCR
+
+- Microsoft ONNX Runtime and System.Numerics.Tensors
+  Copyright Microsoft Corporation
+  Licensed under the MIT License
+  https://github.com/microsoft/onnxruntime
+
+- SkiaSharp
+  Copyright Microsoft Corporation
+  Licensed under the MIT License
+  https://github.com/mono/SkiaSharp
+
+- Clipper2
+  Copyright Angus Johnson
+  Licensed under the Boost Software License 1.0
+  https://github.com/AngusJohnson/Clipper2
+
+The complete license texts are distributed by the corresponding NuGet
+packages and are available at the project links above. GalgameUiTranslator's
+own source code remains licensed under the MIT License in LICENSE.

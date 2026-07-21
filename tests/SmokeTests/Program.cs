@@ -18,6 +18,7 @@ namespace SmokeTests
             Directory.CreateDirectory(root);
             try
             {
+                TestLocalOcrConfiguration();
                 TestRendering(root);
                 TestTransparentClear();
                 TestRepairMask(root);
@@ -35,13 +36,36 @@ namespace SmokeTests
                 TestNavigationRepaint();
                 TestPreflight(root);
                 TestHistoryAndRecovery(root);
-                Console.WriteLine("PASS: masks, advanced text, style presets, DDS, atlas, thumbnails, status filters, resumable batch queue, translation memory, comparison, preflight, recovery and UI layout");
+                Console.WriteLine("PASS: local OCR, masks, advanced text, style presets, DDS, atlas, thumbnails, status filters, resumable batch queue, translation memory, comparison, preflight, recovery and UI layout");
                 return 0;
             }
             catch (Exception exception)
             {
                 Console.Error.WriteLine("FAIL: " + exception);
                 return 1;
+            }
+        }
+
+        private static void TestLocalOcrConfiguration()
+        {
+            var settings = new AppSettings();
+            Assert(settings.RecognitionMode == RecognitionModes.Local,
+                "local OCR is not the default recognition mode");
+            Assert(RecognitionModes.Normalize("unknown") == RecognitionModes.Local,
+                "unknown recognition modes do not fall back to local OCR");
+            Assert(RecognitionModes.UsesLocal(RecognitionModes.LocalThenCloud) &&
+                   RecognitionModes.UsesCloud(RecognitionModes.LocalThenCloud),
+                "local-then-cloud mode does not enable both providers");
+            Assert(LocalOcrService.ContainsJapaneseText("設定・ロード"),
+                "Japanese OCR text filter rejected valid text");
+            Assert(!LocalOcrService.ContainsJapaneseText("LOAD 123"),
+                "Japanese OCR text filter accepted Latin-only text");
+
+            using (var ocr = new LocalOcrService())
+            {
+                Assert(ocr.IsAvailable,
+                    "local OCR models are missing from the build output: " +
+                    string.Join(", ", ocr.GetMissingModelFiles().Select(Path.GetFileName)));
             }
         }
 

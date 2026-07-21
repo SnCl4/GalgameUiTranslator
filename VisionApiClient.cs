@@ -96,7 +96,8 @@ namespace GalgameUiTranslator
                     return new ApiAnalysisResult
                     {
                         Regions = ParseRegions(content, imageWidth, imageHeight),
-                        RawResponse = content
+                        RawResponse = content,
+                        ProviderName = "云端视觉 API"
                     };
                 }
             }

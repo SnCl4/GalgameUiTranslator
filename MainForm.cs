@@ -13,6 +13,7 @@ namespace GalgameUiTranslator
     public sealed class MainForm : Form
     {
         private readonly VisionApiClient _apiClient = new VisionApiClient();
+        private readonly LocalOcrService _localOcr = new LocalOcrService();
         private readonly ImageCanvas _canvas = new ImageCanvas();
         private readonly RegionEditorPanel _editor = new RegionEditorPanel { Name = "WorkspaceRegionEditor" };
         private readonly ListBox _imageList = new ListBox();
@@ -28,8 +29,8 @@ namespace GalgameUiTranslator
         private readonly ToolStripButton _saveButton = new ToolStripButton("保存");
         private readonly ToolStripButton _undoButton = new ToolStripButton("撤销") { ToolTipText = "撤销上一步（Ctrl+Z）" };
         private readonly ToolStripButton _redoButton = new ToolStripButton("重做") { ToolTipText = "重做下一步（Ctrl+Y）" };
-        private readonly ToolStripButton _visionButton = new ToolStripButton("识图") { ToolTipText = "识别当前图片" };
-        private readonly ToolStripButton _visionBatchButton = new ToolStripButton("批量识图");
+        private readonly ToolStripButton _visionButton = new ToolStripButton("识图") { ToolTipText = "按设置的方式识别当前图片，默认使用本地 OCR" };
+        private readonly ToolStripButton _visionBatchButton = new ToolStripButton("批量识图") { ToolTipText = "批量识别尚未建立文字区域的图片" };
         private readonly ToolStripButton _translateButton = new ToolStripButton("翻译") { ToolTipText = "翻译当前图片" };
         private readonly ToolStripButton _translateAllButton = new ToolStripButton("批量翻译");
         private readonly ToolStripButton _translationResourcesButton = new ToolStripButton("术语库") { ToolTipText = "管理翻译记忆与固定术语" };
@@ -528,7 +529,7 @@ namespace GalgameUiTranslator
             }, 0, 1);
             content.Controls.Add(new Label
             {
-                Text = "01  导入图片并建立工程\r\n02  AI 识别或手工框选日文\r\n03  DeepSeek 翻译并人工校对\r\n04  调整字体、描边与背景修补\r\n05  预览后按原尺寸批量导出",
+                Text = "01  导入图片并建立工程\r\n02  本地 OCR 识别或手工框选日文\r\n03  DeepSeek 翻译并人工校对\r\n04  调整字体、描边与背景修补\r\n05  预览后按原尺寸批量导出",
                 Dock = DockStyle.Fill,
                 Padding = new Padding(4, 10, 4, 4),
                 ForeColor = UiTheme.TextSecondary,
@@ -1023,6 +1024,7 @@ namespace GalgameUiTranslator
                 _imageItemTitleFont.Dispose();
                 _imageItemDetailFont.Dispose();
                 _imageItemStatusFont.Dispose();
+                _localOcr.Dispose();
                 _historyTimer.Dispose();
                 _autosaveTimer.Dispose();
             };
@@ -1293,7 +1295,7 @@ namespace GalgameUiTranslator
 
         private async Task AnalyzeCurrentAsync()
         {
-            if (_project == null || _currentDocument == null || !EnsureVisionConfigured()) return;
+            if (_project == null || _currentDocument == null || !EnsureRecognitionConfigured()) return;
             var mergeMode = DialogResult.No;
             if (_currentDocument.Regions.Count > 0)
             {
@@ -1303,17 +1305,10 @@ namespace GalgameUiTranslator
                 if (mergeMode == DialogResult.Cancel) return;
             }
 
-            BeginOperation("正在识别当前图片…");
+            BeginOperation(GetRecognitionProgressText("正在识别当前图片"));
             try
             {
-                var result = await _apiClient.AnalyzeAsync(
-                    ProjectService.GetSourcePath(_project, _currentDocument),
-                    _currentDocument.Width,
-                    _currentDocument.Height,
-                    _settings,
-                    _visionApiKey,
-                    _translationResources.Glossary.Take(200).ToArray(),
-                    _operationCancellation.Token);
+                var result = await AnalyzeImageAsync(_currentDocument, _operationCancellation.Token);
                 ApplyDefaultFont(result.Regions);
                 var memoryMatches = _translationResources.ApplyExactMatches(result.Regions);
                 if (mergeMode == DialogResult.Yes) _currentDocument.Regions.Clear();
@@ -1322,8 +1317,8 @@ namespace GalgameUiTranslator
                 _canvas.NotifyRegionChanged();
                 _editor.SetDocument(_currentDocument, _canvas.SelectedRegion);
                 _statusLabel.Text = result.Regions.Count == 0
-                    ? "识别完成，但模型没有返回文字区域"
-                    : $"识别完成：新增 {result.Regions.Count} 个文字区域，翻译记忆命中 {memoryMatches} 条，请检查低置信度区域";
+                    ? result.ProviderName + "识别完成，但没有发现可翻译的日文区域"
+                    : $"{result.ProviderName}识别完成：新增 {result.Regions.Count} 个文字区域，翻译记忆命中 {memoryMatches} 条，请检查低置信度区域";
                 PersistReviewedTranslations();
             }
             catch (OperationCanceledException)
@@ -1332,7 +1327,7 @@ namespace GalgameUiTranslator
             }
             catch (Exception exception)
             {
-                ShowError("AI 识图失败", exception);
+                ShowError("图片识别失败", exception);
             }
             finally
             {
@@ -1342,7 +1337,7 @@ namespace GalgameUiTranslator
 
         private async Task AnalyzeBatchAsync()
         {
-            if (_project == null || !EnsureVisionConfigured()) return;
+            if (_project == null || !EnsureRecognitionConfigured()) return;
             var targets = _project.Images.Where(image => image.Regions.Count == 0).ToList();
             if (targets.Count == 0)
             {
@@ -1352,7 +1347,7 @@ namespace GalgameUiTranslator
             }
 
             if (MessageBox.Show(this,
-                    $"将调用视觉 API 处理 {targets.Count} 张尚未识别的图片，可能产生 API 费用。是否继续？",
+                    GetBatchRecognitionConfirmation(targets.Count),
                     "确认批量识图", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
             {
                 return;
@@ -1716,22 +1711,15 @@ namespace GalgameUiTranslator
                 return;
             }
 
-            var result = await _apiClient.AnalyzeAsync(
-                ProjectService.GetSourcePath(_project, image),
-                image.Width,
-                image.Height,
-                _settings,
-                _visionApiKey,
-                _translationResources.Glossary.Take(200).ToArray(),
-                cancellationToken);
+            var result = await AnalyzeImageAsync(image, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             ApplyDefaultFont(result.Regions);
             item.MemoryMatchCount = _translationResources.ApplyExactMatches(result.Regions);
             image.Regions.AddRange(result.Regions);
             item.ResultCount = result.Regions.Count;
             item.Message = result.Regions.Count == 0
-                ? "未发现文字区域"
-                : $"新增 {result.Regions.Count} 个区域";
+                ? result.ProviderName + "未发现日文区域"
+                : $"{result.ProviderName}新增 {result.Regions.Count} 个区域";
             if (result.Regions.Count > 0) MarkDirty();
         }
 
@@ -1845,7 +1833,7 @@ namespace GalgameUiTranslator
             var list = items.ToList();
             var needsVision = list.Any(item =>
                 item.Kind == BatchTaskKind.Recognition && RecognitionTaskNeedsApi(item));
-            if (needsVision && !EnsureVisionConfigured()) return false;
+            if (needsVision && !EnsureRecognitionConfigured()) return false;
             var needsTranslation = list.Any(item =>
                 item.Kind == BatchTaskKind.Translation && TranslationTaskNeedsApi(item));
             return !needsTranslation || EnsureTranslationConfigured();
@@ -1986,32 +1974,123 @@ namespace GalgameUiTranslator
             _editor.RefreshFontNames(_settings.DefaultFontFamily);
         }
 
-        private bool EnsureVisionConfigured()
+        private async Task<ApiAnalysisResult> AnalyzeImageAsync(
+            ImageDocument image,
+            CancellationToken cancellationToken)
         {
-            if (string.IsNullOrWhiteSpace(_settings.VisionApiBaseUrl) ||
-                string.IsNullOrWhiteSpace(_settings.VisionModel) ||
-                (string.IsNullOrWhiteSpace(_visionApiKey) && _settings.VisionApiBaseUrl.IndexOf("openai.com", StringComparison.OrdinalIgnoreCase) >= 0))
+            if (_project == null) throw new InvalidOperationException("当前没有打开工程。");
+            if (image == null) throw new ArgumentNullException(nameof(image));
+
+            var mode = RecognitionModes.Normalize(_settings.RecognitionMode);
+            ApiAnalysisResult localResult = null;
+            if (RecognitionModes.UsesLocal(mode) && _localOcr.IsAvailable)
             {
-                ShowApiSettings();
+                localResult = await _localOcr.AnalyzeAsync(
+                    ProjectService.GetSourcePath(_project, image),
+                    image.Width,
+                    image.Height,
+                    _settings,
+                    cancellationToken);
+                if (mode == RecognitionModes.Local || localResult.Regions.Count > 0)
+                    return localResult;
             }
 
+            if (mode == RecognitionModes.Local)
+            {
+                throw new InvalidOperationException(
+                    "本地 OCR 模型不完整，请重新解压完整便携版。\r\n缺少：" +
+                    string.Join("、", _localOcr.GetMissingModelFiles().Select(Path.GetFileName)));
+            }
+
+            if (mode == RecognitionModes.LocalThenCloud && !HasVisionConfiguration())
+                return localResult ?? new ApiAnalysisResult { ProviderName = "本地 OCR" };
+
+            var cloudResult = await _apiClient.AnalyzeAsync(
+                ProjectService.GetSourcePath(_project, image),
+                image.Width,
+                image.Height,
+                _settings,
+                _visionApiKey,
+                _translationResources.Glossary.Take(200).ToArray(),
+                cancellationToken);
+            if (localResult != null)
+            {
+                cloudResult.UsedFallback = true;
+                cloudResult.ProviderName = "云端视觉 API（本地无结果后回退）";
+            }
+            return cloudResult;
+        }
+
+        private bool EnsureRecognitionConfigured()
+        {
+            var mode = RecognitionModes.Normalize(_settings.RecognitionMode);
+            if (mode == RecognitionModes.Local)
+            {
+                if (_localOcr.IsAvailable) return true;
+                MessageBox.Show(this,
+                    "本地 OCR 模型不完整，请重新解压完整便携版。\r\n\r\n缺少：" +
+                    string.Join("、", _localOcr.GetMissingModelFiles().Select(Path.GetFileName)),
+                    "本地 OCR 不可用",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return false;
+            }
+
+            if (mode == RecognitionModes.LocalThenCloud && _localOcr.IsAvailable) return true;
+            return EnsureVisionConfigured();
+        }
+
+        private string GetRecognitionProgressText(string prefix)
+        {
+            var mode = RecognitionModes.Normalize(_settings.RecognitionMode);
+            if (mode == RecognitionModes.Cloud) return prefix + "（云端视觉 API）…";
+            if (mode == RecognitionModes.LocalThenCloud) return prefix + "（本地优先）…";
+            return prefix + "（本地 OCR）…";
+        }
+
+        private string GetBatchRecognitionConfirmation(int count)
+        {
+            var mode = RecognitionModes.Normalize(_settings.RecognitionMode);
+            if (mode == RecognitionModes.Cloud)
+                return $"将调用云端视觉 API 处理 {count} 张尚未识别的图片，图片会上传且可能产生 API 费用。是否继续？";
+            if (mode == RecognitionModes.LocalThenCloud)
+                return $"将在本机优先处理 {count} 张图片；本地没有识别结果时会尝试云端视觉 API，可能产生费用。是否继续？";
+            return $"将在本机离线处理 {count} 张尚未识别的图片，图片不会上传。首次加载模型可能需要一些时间。是否继续？";
+        }
+
+        private bool EnsureVisionConfigured()
+        {
+            if (!HasVisionConfiguration()) ShowApiSettings();
+            return HasVisionConfiguration();
+        }
+
+        private bool HasVisionConfiguration()
+        {
             return !string.IsNullOrWhiteSpace(_settings.VisionApiBaseUrl) &&
                    !string.IsNullOrWhiteSpace(_settings.VisionModel) &&
-                   (!string.IsNullOrWhiteSpace(_visionApiKey) || _settings.VisionApiBaseUrl.IndexOf("openai.com", StringComparison.OrdinalIgnoreCase) < 0);
+                   (!RequiresApiKey(_settings.VisionApiBaseUrl) || !string.IsNullOrWhiteSpace(_visionApiKey));
         }
 
         private bool EnsureTranslationConfigured()
         {
             if (string.IsNullOrWhiteSpace(_settings.TranslationApiBaseUrl) ||
                 string.IsNullOrWhiteSpace(_settings.TranslationModel) ||
-                (string.IsNullOrWhiteSpace(_translationApiKey) && _settings.TranslationApiBaseUrl.IndexOf("deepseek.com", StringComparison.OrdinalIgnoreCase) >= 0))
+                (string.IsNullOrWhiteSpace(_translationApiKey) && RequiresApiKey(_settings.TranslationApiBaseUrl)))
             {
                 ShowApiSettings();
             }
 
             return !string.IsNullOrWhiteSpace(_settings.TranslationApiBaseUrl) &&
                    !string.IsNullOrWhiteSpace(_settings.TranslationModel) &&
-                   (!string.IsNullOrWhiteSpace(_translationApiKey) || _settings.TranslationApiBaseUrl.IndexOf("deepseek.com", StringComparison.OrdinalIgnoreCase) < 0);
+                   (!RequiresApiKey(_settings.TranslationApiBaseUrl) || !string.IsNullOrWhiteSpace(_translationApiKey));
+        }
+
+        private static bool RequiresApiKey(string baseUrl)
+        {
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)) return true;
+            return !uri.IsLoopback &&
+                   !string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) &&
+                   !uri.Host.EndsWith(".local", StringComparison.OrdinalIgnoreCase);
         }
 
         private void PopulateImageList(string filter = null, ImageDocument selected = null)
@@ -2731,8 +2810,8 @@ namespace GalgameUiTranslator
             MessageBox.Show(this,
                 "推荐流程：\r\n\r\n" +
                 "1. 打开解包后的 PNG/JPG/BMP/DDS 图片文件夹。\r\n" +
-                "2. 在 API 设置中填写 DeepSeek 文本翻译接口；视觉 API 可以暂时留空。\r\n" +
-                "3. 使用视觉 API 自动识别，或点击“框选文字”手工建立区域并录入日文。\r\n" +
+                "2. 在识图/API设置中保留推荐的本地 OCR，并填写 DeepSeek 文本翻译接口。\r\n" +
+                "3. 点击“识图”离线识别日文；特殊装饰字可点击“框选”手工建立区域。\r\n" +
                 "4. 点击“翻译当前图”或“翻译全部待译”。\r\n" +
                 "5. 逐框检查字体、渐变、阴影、发光、旋转、竖排和换行。\r\n" +
                 "6. 复杂背景先选中文字框，再使用“蒙版笔/蒙版擦”和“内容感知修复”。\r\n" +

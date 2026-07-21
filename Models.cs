@@ -106,6 +106,8 @@ namespace GalgameUiTranslator
 
     public sealed class AppSettings
     {
+        public string RecognitionMode { get; set; } = RecognitionModes.Local;
+        public float LocalOcrMinimumConfidence { get; set; } = 0.35f;
         public string VisionApiBaseUrl { get; set; } = "https://api.openai.com/v1";
         public string VisionModel { get; set; } = "gpt-4.1-mini";
         public string TranslationApiBaseUrl { get; set; } = "https://api.deepseek.com";
@@ -113,6 +115,32 @@ namespace GalgameUiTranslator
         public string DefaultFontFamily { get; set; } = "Microsoft YaHei";
         public string TranslationInstructions { get; set; } =
             "将图片中的日文游戏界面文字准确翻译成简体中文。保留专有名词、数字、符号和按钮语气；不要添加解释。";
+    }
+
+    public static class RecognitionModes
+    {
+        public const string Local = "Local";
+        public const string LocalThenCloud = "LocalThenCloud";
+        public const string Cloud = "Cloud";
+
+        public static string Normalize(string value)
+        {
+            if (string.Equals(value, Cloud, StringComparison.OrdinalIgnoreCase)) return Cloud;
+            if (string.Equals(value, LocalThenCloud, StringComparison.OrdinalIgnoreCase)) return LocalThenCloud;
+            return Local;
+        }
+
+        public static bool UsesLocal(string value)
+        {
+            var mode = Normalize(value);
+            return mode == Local || mode == LocalThenCloud;
+        }
+
+        public static bool UsesCloud(string value)
+        {
+            var mode = Normalize(value);
+            return mode == Cloud || mode == LocalThenCloud;
+        }
     }
 
     public sealed class TranslationResourceData
@@ -176,6 +204,8 @@ namespace GalgameUiTranslator
     {
         public List<TextRegion> Regions { get; set; } = new List<TextRegion>();
         public string RawResponse { get; set; } = string.Empty;
+        public string ProviderName { get; set; } = string.Empty;
+        public bool UsedFallback { get; set; }
     }
 
     public sealed class AutosaveDocument

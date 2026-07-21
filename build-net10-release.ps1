@@ -9,7 +9,6 @@ $localDotnet = Join-Path $projectRoot ".dotnet10\dotnet.exe"
 $dotnet = if (Test-Path $localDotnet) { $localDotnet } else { "dotnet" }
 $testProject = Join-Path $projectRoot "tests\SmokeTests\SmokeTests.Net10.csproj"
 $appProject = Join-Path $projectRoot "GalgameUiTranslator.Net10.csproj"
-$offlineNugetConfig = Join-Path $projectRoot "NuGet.Config"
 $onlineNugetConfig = Join-Path $projectRoot "NuGet.Net10.Config"
 $frameworkOutput = Join-Path $projectRoot "publish\GalgameUiTranslator-net10-framework"
 $selfContainedOutput = Join-Path $projectRoot "publish\GalgameUiTranslator-net10-win-x64"
@@ -29,7 +28,7 @@ if (-not ($sdks -match '^10\.')) {
 Write-Host "Restoring the framework-dependent build..."
 & $dotnet restore `
     $testProject `
-    --configfile $offlineNugetConfig
+    --configfile $onlineNugetConfig
 if ($LASTEXITCODE -ne 0) {
     throw ".NET 10 framework restore failed with exit code $LASTEXITCODE."
 }
@@ -106,6 +105,7 @@ Copy-Item -LiteralPath (Join-Path $projectRoot ".dotnet10\dotnet.exe") -Destinat
 Copy-Item -LiteralPath (Join-Path $projectRoot ".dotnet10\LICENSE.txt") -Destination $runtimeRoot
 Copy-Item -LiteralPath (Join-Path $projectRoot ".dotnet10\ThirdPartyNotices.txt") -Destination $runtimeRoot
 Copy-Item -LiteralPath (Join-Path $projectRoot "PORTABLE_README.txt") -Destination $portableOutput
+Copy-Item -LiteralPath (Join-Path $projectRoot "THIRD-PARTY-NOTICES.txt") -Destination $portableOutput
 
 if (Test-Path $portableZip) { Remove-Item -LiteralPath $portableZip -Force }
 Compress-Archive -Path (Join-Path $portableOutput "*") -DestinationPath $portableZip -CompressionLevel Optimal

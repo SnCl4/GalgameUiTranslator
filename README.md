@@ -7,7 +7,8 @@
 - 受 GalTransl Desktop 启发的深色侧栏、首页统计卡片和独立图片工作台
 - 批量导入 PNG、JPG、JPEG、BMP、DDS，保留目录结构、宽高和 Alpha 通道
 - 图片资源列表显示异步缩略图，并可按未识别、待翻译、待校对和已校对状态筛选
-- 使用 OpenAI 兼容的视觉 API 识别日文、位置和基础样式
+- 内置 PP-OCRv6 日中多语言本地 OCR，默认离线识别，图片不会上传
+- 可选择“本地优先、无结果时回退云端”或仅使用 OpenAI 兼容视觉 API
 - 使用独立的 OpenAI 兼容文本 API 翻译，已预设 DeepSeek 官方接口
 - 在没有视觉 API 时，手工框选区域、录入日文，再交给 DeepSeek 翻译
 - 当前图片识别、未处理图片批量识别、当前图片翻译、全工程待译文本批量翻译
@@ -33,10 +34,10 @@
 推荐使用绿色便携版。完整解压后双击：
 
 ```text
-publish\GalgameUiTranslator-v0.7.0-portable\GalgameUiTranslator.exe
+publish\GalgameUiTranslator-v0.8.0-portable\GalgameUiTranslator.exe
 ```
 
-也可以把 `GalgameUiTranslator-v0.7.0-portable.zip` 复制到其他 64 位 Windows 电脑，完整解压后运行；无需单独安装 .NET。不要只复制 EXE，必须保留旁边的 `.runtime` 文件夹。
+也可以把 `GalgameUiTranslator-v0.8.0-portable.zip` 复制到其他 64 位 Windows 电脑，完整解压后运行；无需单独安装 .NET。不要只复制 EXE，必须保留旁边的 `.runtime` 和 `models` 文件夹。
 
 开发目录内也可直接双击：
 
@@ -49,8 +50,8 @@ publish\GalgameUiTranslator-net10-framework\GalgameUiTranslator.exe
 ## 推荐流程
 
 1. 点击“打开图片文件夹”，选择解包后的 UI 图片根目录。
-2. 点击“API设置”。文本翻译填写 DeepSeek API Key；视觉识别 API 可以暂时留空。
-3. 有视觉 API 时点击“AI识图”；没有时点击“框选文字”，在图片上拖出区域并填写日文原文。
+2. 点击“API设置”，保留推荐的“本地 OCR”，并为文本翻译填写 DeepSeek API Key。
+3. 点击“识图”离线识别日文；装饰字或漏识内容可点击“框选”，手工建立区域并填写日文原文。
 4. 在“术语库”中录入固定译法，再点击“翻译”或“批量翻译”；完全相同的已校对原文会先从翻译记忆回填。
 5. 逐个检查译文与区域尺寸；在右侧“文字样式预设”中套用常用外观，或把当前外观保存为跨工程预设。
 6. 复杂背景选中文字区域后，用“蒙版笔/蒙版擦”准确覆盖原文字，再选择“内容感知修复”。
@@ -71,7 +72,15 @@ API 地址：https://api.deepseek.com
 
 模型名称可在设置中修改。API Key 只保存在当前进程内，不写入工程或本地设置；关闭程序后需要重新填写。
 
-视觉 API 与文本翻译 API 完全分开。未来 DeepSeek 提供兼容的视觉输入后，可以直接把它填入“视觉识别 API”；如果图片编辑接口采用不同协议，只需要增加对应适配器，不需要修改工程与排版格式。
+视觉 API 与文本翻译 API 完全分开。未来 DeepSeek 提供兼容的视觉输入后，可以把它填入“云端视觉识别 API”；如果图片编辑接口采用不同协议，只需增加对应适配器，不需要修改工程与排版格式。
+
+## 本地 OCR 与隐私
+
+- 默认模式使用随便携版提供的 PP-OCRv6 检测与识别模型，不需要识图 API Key。
+- “本地 OCR”模式不会上传图片；DeepSeek 只接收识别出的文本。
+- “本地优先、无结果时回退云端”可能在本地无结果时上传图片，软件会在批量处理前明确提示。
+- OCR 模型位于 `models` 文件夹，缺失时软件会停止识图并显示缺少的文件名，不会静默改用云端。
+- 自动识别结果仍需人工校对，尤其是艺术字、竖排文字、小字号和低对比度内容。
 
 ## 翻译记忆与术语表
 
@@ -117,7 +126,7 @@ API 地址：https://api.deepseek.com
 
 - 尚未支持 BC7 DDS、PSD、WebP、Unity SpriteAtlas 或游戏封包。
 - 图集元数据目前支持 TexturePacker JSON 与 Spine `.atlas`；不负责修改元数据或重新排布精灵。
-- 视觉模型给出的文字坐标可能不精确，导出前必须人工预览。
+- 本地 OCR 与视觉模型给出的文字和坐标都可能不精确，导出前必须人工预览。
 - 本地内容感知修复适合文字笔画和简单纹理，复杂人物或装饰仍可能需要外部修图。
 
 ## 许可证
@@ -138,8 +147,8 @@ API 地址：https://api.deepseek.com
 同一构建命令还会生成可独立复制的绿色便携目录和 ZIP：
 
 ```text
-publish\GalgameUiTranslator-v0.7.0-portable\
-publish\GalgameUiTranslator-v0.7.0-portable.zip
+publish\GalgameUiTranslator-v0.8.0-portable\
+publish\GalgameUiTranslator-v0.8.0-portable.zip
 ```
 
 网络可访问 NuGet 时，可额外生成自包含单文件版本：
@@ -160,5 +169,6 @@ publish\GalgameUiTranslator-v0.7.0-portable.zip
 
 ```powershell
 $env:DOTNET_CLI_HOME=(Join-Path (Get-Location) '.dotnet-home')
-dotnet run -c Release --project tests\SmokeTests\SmokeTests.csproj --configfile NuGet.Config
+.\.dotnet10\dotnet.exe restore tests\SmokeTests\SmokeTests.Net10.csproj --configfile NuGet.Net10.Config
+.\.dotnet10\dotnet.exe run -c Release --project tests\SmokeTests\SmokeTests.Net10.csproj --no-restore
 ```
