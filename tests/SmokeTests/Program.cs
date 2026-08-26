@@ -19,7 +19,10 @@ namespace SmokeTests
             try
             {
                 TestLocalOcrConfiguration();
+                TestProviderProfilesAndCloudRecognition();
+                TestTranslationQuality();
                 TestRendering(root);
+                TestLossyExportValidation(root);
                 TestTransparentClear();
                 TestRepairMask(root);
                 TestAdvancedTextRendering();
@@ -51,6 +54,8 @@ namespace SmokeTests
             var settings = new AppSettings();
             Assert(settings.RecognitionMode == RecognitionModes.Local,
                 "local OCR is not the default recognition mode");
+            Assert(settings.RememberApiKeys,
+                "provider API key storage is not enabled by default");
             Assert(RecognitionModes.Normalize("unknown") == RecognitionModes.Local,
                 "unknown recognition modes do not fall back to local OCR");
             Assert(RecognitionModes.UsesLocal(RecognitionModes.LocalThenCloud) &&
@@ -67,6 +72,157 @@ namespace SmokeTests
                     "local OCR models are missing from the build output: " +
                     string.Join(", ", ocr.GetMissingModelFiles().Select(Path.GetFileName)));
             }
+        }
+
+        private static void TestProviderProfilesAndCloudRecognition()
+        {
+            Assert(ApiProviderProfiles.Detect(
+                       "https://generativelanguage.googleapis.com/v1beta/openai",
+                       "gemini-3.7-flash") == ApiProviderKind.Gemini,
+                "Gemini OpenAI-compatible endpoint was not detected");
+            Assert(ApiProviderProfiles.Detect(
+                       "https://api.deepseek.com",
+                       "deepseek-v4-flash-vision-exp") == ApiProviderKind.DeepSeek,
+                "DeepSeek vision endpoint was not detected");
+            Assert(ApiProviderProfiles.Vision.Any(profile =>
+                    profile.Model == "deepseek-v4-flash-vision-exp") &&
+                   ApiProviderProfiles.Translation.Any(profile =>
+                    profile.Model == "gemini-3.7-flash"),
+                "provider presets are incomplete");
+            var geminiCredential = ApiCredentialStore.GetCredentialId(
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+                "gemini-3.7-flash");
+            var deepSeekVisionCredential = ApiCredentialStore.GetCredentialId(
+                "https://api.deepseek.com",
+                "deepseek-v4-flash-vision-exp");
+            var deepSeekTranslationCredential = ApiCredentialStore.GetCredentialId(
+                "https://api.deepseek.com",
+                "deepseek-v4-flash");
+            Assert(geminiCredential != deepSeekVisionCredential &&
+                   deepSeekVisionCredential == deepSeekTranslationCredential,
+                "provider credentials are not separated or shared consistently");
+            Assert(ApiCredentialStore.GetCredentialId("https://one.example/v1", "model") !=
+                   ApiCredentialStore.GetCredentialId("https://two.example/v1", "model"),
+                "custom endpoint credentials are not isolated");
+            Assert(ApiCredentialStore.GetCredentialId(
+                       "https://gateway.example/v1",
+                       "gemini-3.7-flash") != geminiCredential,
+                "a custom gateway reused the official Gemini credential");
+
+            var applyOptions = typeof(VisionApiClient).GetMethod(
+                "ApplyProviderOptions",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+            var geminiPayload = new System.Collections.Generic.Dictionary<string, object>();
+            applyOptions.Invoke(null, new object[]
+            {
+                geminiPayload,
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+                "gemini-3.7-flash",
+                0.2d
+            });
+            Assert(geminiPayload.ContainsKey("reasoning_effort") &&
+                   !geminiPayload.ContainsKey("temperature"),
+                "Gemini adapter did not omit unsupported temperature settings");
+            var deepSeekPayload = new System.Collections.Generic.Dictionary<string, object>();
+            applyOptions.Invoke(null, new object[]
+            {
+                deepSeekPayload,
+                "https://api.deepseek.com",
+                "deepseek-v4-flash",
+                0.2d
+            });
+            Assert(deepSeekPayload.ContainsKey("thinking") &&
+                   deepSeekPayload.ContainsKey("temperature"),
+                "DeepSeek adapter did not disable thinking for OCR/translation requests");
+
+            var single = VisionApiClient.CreateCloudTiles(1280, 720, true);
+            var tiled = VisionApiClient.CreateCloudTiles(1920, 1080, true);
+            Assert(single.Count == 1, "ordinary images were split unnecessarily");
+            Assert(tiled.Count == 2 && tiled.Min(tile => tile.Left) == 0 &&
+                   tiled.Max(tile => tile.Right) == 1920,
+                "large-image tiles do not cover the full image");
+            Assert(tiled[0].Right > tiled[1].Left,
+                "large-image tiles do not overlap for boundary text");
+
+            var local = new TextRegion
+            {
+                X = 20,
+                Y = 15,
+                Width = 120,
+                Height = 36,
+                SourceText = "設 定",
+                Translation = "旧译文",
+                Confidence = 0.42f
+            };
+            var cloud = new TextRegion
+            {
+                X = 22,
+                Y = 16,
+                Width = 116,
+                Height = 34,
+                SourceText = "設定",
+                Translation = "不应保留",
+                Confidence = 0.93f
+            };
+            var extra = new TextRegion
+            {
+                X = 300,
+                Y = 20,
+                Width = 80,
+                Height = 30,
+                SourceText = "開始",
+                Confidence = 0.88f
+            };
+            var merged = TextRegionMergeService.MergeLocalAndCloud(
+                new[] { local }, new[] { cloud, extra }, 640, 360);
+            Assert(merged.Count == 2 && merged.Any(region => region.SourceText == "設定"),
+                "local/cloud merge did not replace a low-confidence overlap or retain a cloud-only region");
+            Assert(merged.All(region => string.IsNullOrEmpty(region.Translation) && !region.Reviewed),
+                "recognition merge leaked translations or review state into OCR results");
+
+            var parse = typeof(VisionApiClient).GetMethod(
+                "ParseRegions",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+            var parsed = (System.Collections.Generic.List<TextRegion>)parse.Invoke(null, new object[]
+            {
+                "{\"regions\":[{\"x\":1,\"y\":2,\"width\":30,\"height\":12," +
+                "\"source\":\"終了\",\"translation\":\"结束\"}]}",
+                100,
+                50
+            });
+            Assert(parsed.Count == 1 && parsed[0].SourceText == "終了" &&
+                   string.IsNullOrEmpty(parsed[0].Translation),
+                "cloud recognition still populated translations");
+        }
+
+        private static void TestTranslationQuality()
+        {
+            var invalid = new TextRegion
+            {
+                SourceText = "開始 %s {0} 12",
+                Translation = "开始 %d {0} 13 テスト"
+            };
+            var findings = TranslationQualityService.Analyze(invalid, new[]
+            {
+                new GlossaryEntry { Source = "開始", Translation = "开始游戏" }
+            });
+            Assert(findings.Any(finding => finding.Code == "PROTECTED_TOKEN_MISMATCH" &&
+                                           finding.Severity == PreflightSeverity.Error),
+                "quality checks did not reject changed placeholders");
+            Assert(findings.Any(finding => finding.Code == "NUMBER_MISMATCH"),
+                "quality checks did not reject changed numbers");
+            Assert(findings.Any(finding => finding.Code == "JAPANESE_REMAINS"),
+                "quality checks did not detect Japanese residue");
+            Assert(findings.Any(finding => finding.Code == "GLOSSARY_MISMATCH"),
+                "quality checks did not detect a glossary mismatch");
+
+            var valid = TranslationQualityService.Analyze(new TextRegion
+            {
+                SourceText = "セーブ %s 12",
+                Translation = "保存 %s 12"
+            }, new[] { new GlossaryEntry { Source = "セーブ", Translation = "保存" } });
+            Assert(valid.All(finding => finding.Severity != PreflightSeverity.Error),
+                "quality checks rejected preserved placeholders and numbers");
         }
 
         private static void TestRendering(string root)
@@ -703,6 +859,19 @@ namespace SmokeTests
                 var applyPreset = form.Controls.Find("ApplyStylePresetButton", true);
                 var savePreset = form.Controls.Find("SaveStylePresetButton", true);
                 var deletePreset = form.Controls.Find("DeleteStylePresetButton", true);
+                using (var apiDialog = new ApiSettingsDialog(new AppSettings(), string.Empty, string.Empty))
+                {
+                    Assert(apiDialog.Controls.Find("VisionProviderPreset", true).Length == 1 &&
+                           apiDialog.Controls.Find("TranslationProviderPreset", true).Length == 1 &&
+                           apiDialog.Controls.Find("TestVisionApiButton", true).Length == 1 &&
+                           apiDialog.Controls.Find("TestTranslationApiButton", true).Length == 1 &&
+                           apiDialog.Controls.Find("CloudTilingCheckBox", true).Length == 1 &&
+                           apiDialog.Controls.Find("RememberApiKeysCheckBox", true).Length == 1 &&
+                           apiDialog.Controls.Find("ClearStoredApiKeysButton", true).Length == 1 &&
+                           apiDialog.Controls.Find("VisionApiKeyTextBox", true).Length == 1 &&
+                           apiDialog.Controls.Find("TranslationApiKeyTextBox", true).Length == 1,
+                        "provider presets, credential storage, connection tests or cloud tiling controls were not created");
+                }
                 Assert(editor.Length == 1 && editor[0].Width >= 280,
                     "workspace property editor was clipped by DPI/layout constraints");
                 Assert(regionEditor.Length == 1 && regionEditor[0].Enabled,
@@ -780,6 +949,54 @@ namespace SmokeTests
             ImageProcessor.ExportDocument(sourcePath, outputPath, image);
             Assert(string.IsNullOrEmpty(PreflightService.ValidateExportedFile(sourcePath, outputPath, image)),
                 "post-export dimension/alpha validation failed");
+
+            using (var tampered = ImageProcessor.LoadBitmapUnlocked(outputPath))
+            {
+                tampered.SetPixel(0, 0, Color.Magenta);
+                tampered.Save(outputPath, ImageFormat.Png);
+            }
+            Assert(!string.IsNullOrEmpty(PreflightService.ValidateExportedFile(sourcePath, outputPath, image)),
+                "post-export pixel validation accepted a tampered image");
+        }
+
+        private static void TestLossyExportValidation(string root)
+        {
+            var sourcePath = Path.Combine(root, "lossy-source.jpg");
+            var outputPath = Path.Combine(root, "lossy-output.jpg");
+            using (var bitmap = new Bitmap(320, 120, PixelFormat.Format24bppRgb))
+            using (var graphics = Graphics.FromImage(bitmap))
+            using (var background = new LinearGradientBrush(
+                       new Rectangle(0, 0, bitmap.Width, bitmap.Height),
+                       Color.FromArgb(30, 50, 95),
+                       Color.FromArgb(90, 45, 80),
+                       0f))
+            {
+                graphics.FillRectangle(background, 0, 0, bitmap.Width, bitmap.Height);
+                bitmap.Save(sourcePath, ImageFormat.Jpeg);
+            }
+
+            var document = new ImageDocument
+            {
+                RelativePath = "lossy-source.jpg",
+                Width = 320,
+                Height = 120
+            };
+            document.Regions.Add(new TextRegion
+            {
+                X = 70,
+                Y = 35,
+                Width = 180,
+                Height = 50,
+                SourceText = "設定",
+                Translation = "设置",
+                FontFamily = "Microsoft YaHei",
+                FontSize = 24,
+                BackgroundMode = "Solid",
+                Reviewed = true
+            });
+            ImageProcessor.ExportDocument(sourcePath, outputPath, document);
+            Assert(string.IsNullOrEmpty(PreflightService.ValidateExportedFile(sourcePath, outputPath, document)),
+                "post-export visual validation rejected a valid JPEG");
         }
 
         private static void TestHistoryAndRecovery(string root)

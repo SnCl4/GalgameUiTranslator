@@ -98,6 +98,17 @@ namespace GalgameUiTranslator
             _batchPage = new BatchTaskPage(_batchTaskCenter);
             _translationResources = TranslationResourceService.LoadDefault();
             _settings = ProjectService.LoadSettings();
+            if (_settings.RememberApiKeys)
+            {
+                ApiCredentialStore.TryRead(
+                    _settings.VisionApiBaseUrl,
+                    _settings.VisionModel,
+                    out _visionApiKey);
+                ApiCredentialStore.TryRead(
+                    _settings.TranslationApiBaseUrl,
+                    _settings.TranslationModel,
+                    out _translationApiKey);
+            }
             Text = "Galgame UI 图片汉化工具";
             StartPosition = FormStartPosition.CenterScreen;
             WindowState = FormWindowState.Maximized;
@@ -529,7 +540,7 @@ namespace GalgameUiTranslator
             }, 0, 1);
             content.Controls.Add(new Label
             {
-                Text = "01  导入图片并建立工程\r\n02  本地 OCR 识别或手工框选日文\r\n03  DeepSeek 翻译并人工校对\r\n04  调整字体、描边与背景修补\r\n05  预览后按原尺寸批量导出",
+                Text = "01  导入图片并建立工程\r\n02  本地或云端识别日文\r\n03  独立文本 API 翻译并人工校对\r\n04  调整字体、描边与背景修补\r\n05  预检并按原尺寸批量导出",
                 Dock = DockStyle.Fill,
                 Padding = new Padding(4, 10, 4, 4),
                 ForeColor = UiTheme.TextSecondary,
@@ -1271,7 +1282,9 @@ namespace GalgameUiTranslator
                 ProjectService.SaveSettings(_settings);
                 _canvas.DefaultFontFamily = _settings.DefaultFontFamily;
                 _editor.RefreshFontNames(_settings.DefaultFontFamily);
-                _statusLabel.Text = "API 与翻译设置已更新";
+                _statusLabel.Text = _settings.RememberApiKeys
+                    ? "API 与翻译设置已更新；密钥已按供应商保存到 Windows 凭据管理器"
+                    : "API 与翻译设置已更新；密钥仅在本次运行期间使用";
             }
         }
 
@@ -1901,7 +1914,7 @@ namespace GalgameUiTranslator
             PreflightReport report;
             try
             {
-                report = PreflightService.Analyze(_project);
+                report = PreflightService.Analyze(_project, _translationResources.Glossary);
             }
             finally
             {
@@ -1983,16 +1996,27 @@ namespace GalgameUiTranslator
 
             var mode = RecognitionModes.Normalize(_settings.RecognitionMode);
             ApiAnalysisResult localResult = null;
+            Exception localFailure = null;
             if (RecognitionModes.UsesLocal(mode) && _localOcr.IsAvailable)
             {
-                localResult = await _localOcr.AnalyzeAsync(
-                    ProjectService.GetSourcePath(_project, image),
-                    image.Width,
-                    image.Height,
-                    _settings,
-                    cancellationToken);
-                if (mode == RecognitionModes.Local || localResult.Regions.Count > 0)
-                    return localResult;
+                try
+                {
+                    localResult = await _localOcr.AnalyzeAsync(
+                        ProjectService.GetSourcePath(_project, image),
+                        image.Width,
+                        image.Height,
+                        _settings,
+                        cancellationToken);
+                    if (mode == RecognitionModes.Local) return localResult;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception exception) when (mode == RecognitionModes.LocalThenCloud && HasVisionConfiguration())
+                {
+                    localFailure = exception;
+                }
             }
 
             if (mode == RecognitionModes.Local)
@@ -2003,20 +2027,44 @@ namespace GalgameUiTranslator
             }
 
             if (mode == RecognitionModes.LocalThenCloud && !HasVisionConfiguration())
-                return localResult ?? new ApiAnalysisResult { ProviderName = "本地 OCR" };
+                throw new InvalidOperationException("合并识图模式需要配置云端视觉 API。");
 
-            var cloudResult = await _apiClient.AnalyzeAsync(
-                ProjectService.GetSourcePath(_project, image),
-                image.Width,
-                image.Height,
-                _settings,
-                _visionApiKey,
-                _translationResources.Glossary.Take(200).ToArray(),
-                cancellationToken);
+            ApiAnalysisResult cloudResult;
+            try
+            {
+                cloudResult = await _apiClient.AnalyzeAsync(
+                    ProjectService.GetSourcePath(_project, image),
+                    image.Width,
+                    image.Height,
+                    _settings,
+                    _visionApiKey,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (mode == RecognitionModes.LocalThenCloud && localResult != null)
+            {
+                localResult.UsedFallback = true;
+                localResult.RawResponse = exception.Message;
+                localResult.ProviderName = "本地 OCR（云端合并失败，仅保留本地结果）";
+                return localResult;
+            }
             if (localResult != null)
             {
+                cloudResult.Regions = TextRegionMergeService.MergeLocalAndCloud(
+                    localResult.Regions,
+                    cloudResult.Regions,
+                    image.Width,
+                    image.Height);
                 cloudResult.UsedFallback = true;
-                cloudResult.ProviderName = "云端视觉 API（本地无结果后回退）";
+                cloudResult.ProviderName = "本地 OCR + " + cloudResult.ProviderName + "（置信度合并）";
+            }
+            else if (localFailure != null)
+            {
+                cloudResult.UsedFallback = true;
+                cloudResult.ProviderName += "（本地 OCR 失败，仅保留云端结果）";
             }
             return cloudResult;
         }
@@ -2036,7 +2084,11 @@ namespace GalgameUiTranslator
                 return false;
             }
 
-            if (mode == RecognitionModes.LocalThenCloud && _localOcr.IsAvailable) return true;
+            if (mode == RecognitionModes.LocalThenCloud)
+            {
+                if (!HasVisionConfiguration()) ShowApiSettings();
+                return HasVisionConfiguration();
+            }
             return EnsureVisionConfigured();
         }
 
@@ -2044,7 +2096,7 @@ namespace GalgameUiTranslator
         {
             var mode = RecognitionModes.Normalize(_settings.RecognitionMode);
             if (mode == RecognitionModes.Cloud) return prefix + "（云端视觉 API）…";
-            if (mode == RecognitionModes.LocalThenCloud) return prefix + "（本地优先）…";
+            if (mode == RecognitionModes.LocalThenCloud) return prefix + "（本地与云端合并）…";
             return prefix + "（本地 OCR）…";
         }
 
@@ -2054,7 +2106,7 @@ namespace GalgameUiTranslator
             if (mode == RecognitionModes.Cloud)
                 return $"将调用云端视觉 API 处理 {count} 张尚未识别的图片，图片会上传且可能产生 API 费用。是否继续？";
             if (mode == RecognitionModes.LocalThenCloud)
-                return $"将在本机优先处理 {count} 张图片；本地没有识别结果时会尝试云端视觉 API，可能产生费用。是否继续？";
+                return $"将同时使用本地 OCR 与云端视觉 API 处理 {count} 张图片并合并结果。大图可能自动分块，会上传图片并产生 API 费用。是否继续？";
             return $"将在本机离线处理 {count} 张尚未识别的图片，图片不会上传。首次加载模型可能需要一些时间。是否继续？";
         }
 
@@ -2810,7 +2862,7 @@ namespace GalgameUiTranslator
             MessageBox.Show(this,
                 "推荐流程：\r\n\r\n" +
                 "1. 打开解包后的 PNG/JPG/BMP/DDS 图片文件夹。\r\n" +
-                "2. 在识图/API设置中保留推荐的本地 OCR，并填写 DeepSeek 文本翻译接口。\r\n" +
+                "2. 在识图/API设置中选择供应商预设，保留推荐的本地 OCR，并填写文本翻译接口。\r\n" +
                 "3. 点击“识图”离线识别日文；特殊装饰字可点击“框选”手工建立区域。\r\n" +
                 "4. 点击“翻译当前图”或“翻译全部待译”。\r\n" +
                 "5. 逐框检查字体、渐变、阴影、发光、旋转、竖排和换行。\r\n" +

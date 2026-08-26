@@ -5,7 +5,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$localDotnet = Join-Path $projectRoot ".dotnet10\dotnet.exe"
+$localDotnetRoot = Join-Path $projectRoot ".dotnet10"
+$localDotnet = Join-Path $localDotnetRoot "dotnet.exe"
+$frameworkRelativeDotNet = "..\..\.dotnet10"
+if (-not (Test-Path $localDotnet)) {
+    $parentDotnetRoot = Join-Path (Split-Path -Parent $projectRoot) ".dotnet10"
+    $parentDotnet = Join-Path $parentDotnetRoot "dotnet.exe"
+    if (Test-Path $parentDotnet) {
+        $localDotnetRoot = $parentDotnetRoot
+        $localDotnet = $parentDotnet
+        $frameworkRelativeDotNet = "..\..\..\.dotnet10"
+    }
+}
 $dotnet = if (Test-Path $localDotnet) { $localDotnet } else { "dotnet" }
 $testProject = Join-Path $projectRoot "tests\SmokeTests\SmokeTests.Net10.csproj"
 $appProject = Join-Path $projectRoot "GalgameUiTranslator.Net10.csproj"
@@ -53,7 +64,7 @@ Get-ChildItem (Join-Path $projectRoot "obj\net10") -Filter "apphost*.exe" -Recur
     --output $frameworkOutput `
     --self-contained false `
     --no-restore `
-    -p:AppHostRelativeDotNet=..\..\.dotnet10
+    -p:AppHostRelativeDotNet=$frameworkRelativeDotNet
 if ($LASTEXITCODE -ne 0) {
     throw ".NET 10 framework publish failed with exit code $LASTEXITCODE."
 }
@@ -85,11 +96,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $runtimeRoot = Join-Path $portableOutput ".runtime"
-$coreRuntime = Get-ChildItem (Join-Path $projectRoot ".dotnet10\shared\Microsoft.NETCore.App") -Directory |
+$coreRuntime = Get-ChildItem (Join-Path $localDotnetRoot "shared\Microsoft.NETCore.App") -Directory |
     Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
-$desktopRuntime = Get-ChildItem (Join-Path $projectRoot ".dotnet10\shared\Microsoft.WindowsDesktop.App") -Directory |
+$desktopRuntime = Get-ChildItem (Join-Path $localDotnetRoot "shared\Microsoft.WindowsDesktop.App") -Directory |
     Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
-$hostFxr = Get-ChildItem (Join-Path $projectRoot ".dotnet10\host\fxr") -Directory |
+$hostFxr = Get-ChildItem (Join-Path $localDotnetRoot "host\fxr") -Directory |
     Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
 if ($null -eq $coreRuntime -or $null -eq $desktopRuntime -or $null -eq $hostFxr) {
     throw "The local .NET desktop runtime is incomplete. Run .\install-dotnet10-local.ps1 again."
@@ -101,9 +112,9 @@ New-Item -ItemType Directory -Force (Join-Path $runtimeRoot "host\fxr") | Out-Nu
 Copy-Item -LiteralPath $coreRuntime.FullName -Destination (Join-Path $runtimeRoot "shared\Microsoft.NETCore.App") -Recurse
 Copy-Item -LiteralPath $desktopRuntime.FullName -Destination (Join-Path $runtimeRoot "shared\Microsoft.WindowsDesktop.App") -Recurse
 Copy-Item -LiteralPath $hostFxr.FullName -Destination (Join-Path $runtimeRoot "host\fxr") -Recurse
-Copy-Item -LiteralPath (Join-Path $projectRoot ".dotnet10\dotnet.exe") -Destination $runtimeRoot
-Copy-Item -LiteralPath (Join-Path $projectRoot ".dotnet10\LICENSE.txt") -Destination $runtimeRoot
-Copy-Item -LiteralPath (Join-Path $projectRoot ".dotnet10\ThirdPartyNotices.txt") -Destination $runtimeRoot
+Copy-Item -LiteralPath (Join-Path $localDotnetRoot "dotnet.exe") -Destination $runtimeRoot
+Copy-Item -LiteralPath (Join-Path $localDotnetRoot "LICENSE.txt") -Destination $runtimeRoot
+Copy-Item -LiteralPath (Join-Path $localDotnetRoot "ThirdPartyNotices.txt") -Destination $runtimeRoot
 Copy-Item -LiteralPath (Join-Path $projectRoot "PORTABLE_README.txt") -Destination $portableOutput
 Copy-Item -LiteralPath (Join-Path $projectRoot "THIRD-PARTY-NOTICES.txt") -Destination $portableOutput
 

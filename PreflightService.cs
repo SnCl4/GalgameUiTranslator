@@ -34,7 +34,9 @@ namespace GalgameUiTranslator
 
     public static class PreflightService
     {
-        public static PreflightReport Analyze(TranslationProject project)
+        public static PreflightReport Analyze(
+            TranslationProject project,
+            IReadOnlyCollection<GlossaryEntry> glossary = null)
         {
             var report = new PreflightReport();
             if (project == null)
@@ -83,6 +85,11 @@ namespace GalgameUiTranslator
                 }
             }
 
+            var glossaryEntries = (glossary ?? Array.Empty<GlossaryEntry>())
+                .Where(entry => entry != null &&
+                                !string.IsNullOrWhiteSpace(entry.Source) &&
+                                !string.IsNullOrWhiteSpace(entry.Translation))
+                .ToArray();
             var duplicateIds = project.Images
                 .SelectMany(image => image.Regions)
                 .Where(region => !string.IsNullOrWhiteSpace(region.Id))
@@ -129,7 +136,13 @@ namespace GalgameUiTranslator
 
                 for (var index = 0; index < image.Regions.Count; index++)
                 {
-                    AnalyzeRegion(report, image, image.Regions[index], index + 1, duplicateIds);
+                    AnalyzeRegion(
+                        report,
+                        image,
+                        image.Regions[index],
+                        index + 1,
+                        duplicateIds,
+                        glossaryEntries);
                 }
             }
 
@@ -138,35 +151,7 @@ namespace GalgameUiTranslator
 
         public static string ValidateExportedFile(string sourcePath, string outputPath, ImageDocument document)
         {
-            if (!File.Exists(outputPath)) return "导出文件没有生成。";
-            try
-            {
-                var source = ImageProcessor.ReadMetadata(sourcePath);
-                var output = ImageProcessor.ReadMetadata(outputPath);
-                if (output.Width != document.Width || output.Height != document.Height)
-                {
-                    return $"导出尺寸异常：期望 {document.Width}×{document.Height}，实际 {output.Width}×{output.Height}。";
-                }
-
-                if (source.HasAlpha && !output.HasAlpha)
-                {
-                    return "源图片包含 Alpha 通道，但导出图片不再包含 Alpha 通道。";
-                }
-
-                if (Path.GetExtension(sourcePath).Equals(".dds", StringComparison.OrdinalIgnoreCase) &&
-                    (!string.Equals(source.FormatName, output.FormatName, StringComparison.OrdinalIgnoreCase) ||
-                     source.MipMapCount != output.MipMapCount))
-                {
-                    return $"DDS 格式参数发生变化：源文件 {source.FormatName}/{source.MipMapCount} 级 mipmap，" +
-                           $"导出文件 {output.FormatName}/{output.MipMapCount} 级。";
-                }
-
-                return string.Empty;
-            }
-            catch (Exception exception)
-            {
-                return "无法验证导出文件：" + exception.Message;
-            }
+            return ExportValidationService.Validate(sourcePath, outputPath, document);
         }
 
         private static void AnalyzeRegion(
@@ -174,7 +159,8 @@ namespace GalgameUiTranslator
             ImageDocument image,
             TextRegion region,
             int regionIndex,
-            HashSet<string> duplicateIds)
+            HashSet<string> duplicateIds,
+            IReadOnlyCollection<GlossaryEntry> glossary)
         {
             if (string.IsNullOrWhiteSpace(region.Id))
             {
@@ -233,6 +219,18 @@ namespace GalgameUiTranslator
                             "无法验证文字排版：" + exception.Message);
                     }
                 }
+            }
+
+            foreach (var finding in TranslationQualityService.Analyze(region, glossary))
+            {
+                Add(
+                    report,
+                    finding.Severity,
+                    finding.Code,
+                    image.RelativePath,
+                    regionIndex,
+                    region.Id,
+                    finding.Message);
             }
 
             if (!region.Reviewed)

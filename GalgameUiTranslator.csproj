@@ -6,7 +6,7 @@
     <ApplicationIcon />
     <AssemblyName>GalgameUiTranslator</AssemblyName>
     <RootNamespace>GalgameUiTranslator</RootNamespace>
-    <Version>0.8.0</Version>
+    <Version>0.9.1</Version>
     <Product>Galgame UI 图片汉化工具</Product>
     <Description>批量识别、翻译、排版并导出 Galgame UI 图片</Description>
     <LangVersion>latest</LangVersion>

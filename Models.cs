@@ -108,6 +108,8 @@ namespace GalgameUiTranslator
     {
         public string RecognitionMode { get; set; } = RecognitionModes.Local;
         public float LocalOcrMinimumConfidence { get; set; } = 0.35f;
+        public bool CloudTilingEnabled { get; set; } = true;
+        public bool RememberApiKeys { get; set; } = true;
         public string VisionApiBaseUrl { get; set; } = "https://api.openai.com/v1";
         public string VisionModel { get; set; } = "gpt-4.1-mini";
         public string TranslationApiBaseUrl { get; set; } = "https://api.deepseek.com";
